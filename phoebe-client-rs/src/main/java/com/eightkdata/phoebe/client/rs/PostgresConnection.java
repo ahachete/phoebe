@@ -18,6 +18,7 @@
 
 package com.eightkdata.phoebe.client.rs;
 
+import javax.annotation.Nonnegative;
 import javax.annotation.Nonnull;
 
 /**
@@ -28,5 +29,7 @@ public interface PostgresConnection {
     void close();
 
     @Nonnull String host();
+
+    @Nonnull @Nonnegative int port();
 
 }

@@ -111,7 +111,9 @@ public class TcpIpPostgresConnection implements PostgresConnection {
         return remoteAddress().getHostName();
     }
 
-    public int remotePort() {
+    @Nonnull @Nonnegative
+    @Override
+    public int port() {
         return remoteAddress().getPort();
     }
 
@@ -121,7 +123,7 @@ public class TcpIpPostgresConnection implements PostgresConnection {
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + "{ :" + localPort() + " -> " + host() + ":" + remotePort() + " }";
+        return getClass().getSimpleName() + "{ :" + localPort() + " -> " + host() + ":" + port() + " }";
     }
 
 }
