@@ -15,30 +15,34 @@
  *
  */
 
-
 package com.eightkdata.phoebe.client.rs;
 
 import javax.annotation.Nonnegative;
 import javax.annotation.Nonnull;
+import javax.annotation.concurrent.Immutable;
+import java.util.Set;
 
 /**
  *
  */
-public interface PostgresConnection {
+@Immutable
+public class TcpIpPostgresConnectionConfiguration extends AbstractPostgresConnectionConfiguration {
 
-    void close();
+    public TcpIpPostgresConnectionConfiguration(
+            @Nonnull String host, @Nonnegative int port, @Nonnull Set<String> tags
+    ) {
+        super(host, port, tags);
+    }
 
-    @Nonnull Configuration configuration();
+    public TcpIpPostgresConnectionConfiguration(@Nonnull String host, @Nonnegative int port) {
+        super(host, port);
+    }
 
-    interface Configuration {
-
-        @Nonnull String host();
-
-        @Nonnull @Nonnegative int port();
-
-        @Nonnull PostgresConnection connectionFromProvider(@Nonnull PostgresConnectionsProvider postgresConnections)
-        throws FailedConnectionException;
-
+    @Nonnull
+    @Override
+    public PostgresConnection connectionFromProvider(@Nonnull PostgresConnectionsProvider postgresConnections)
+    throws FailedConnectionException {
+        return postgresConnections.tcpIpPostgresConnection(this);
     }
 
 }

@@ -19,10 +19,7 @@
 package com.eightkdata.phoebe.client.rs.rxjava;
 
 
-import com.eightkdata.phoebe.client.rs.FailedConnectionException;
-import com.eightkdata.phoebe.client.rs.PostgresClient;
-import com.eightkdata.phoebe.client.rs.PostgresConnection;
-import com.eightkdata.phoebe.client.rs.TcpIpPostgresConnection;
+import com.eightkdata.phoebe.client.rs.*;
 import com.eightkdata.phoebe.common.FeBe;
 import com.eightkdata.phoebe.common.util.Try;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
@@ -40,9 +37,9 @@ import rx.schedulers.Schedulers;
 
 import javax.annotation.Nonnegative;
 import javax.annotation.Nonnull;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Vector;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,7 +61,7 @@ public class RxPostgresClient implements PostgresClient {
     private final Observable<Try<PostgresConnection,FailedConnectionException>> connections;
 
     private RxPostgresClient(
-            final Observable<Map.Entry<InetAddress,Integer>> postgresHosts,
+            final Observable<PostgresConnection.Configuration> postgresHosts,
             final boolean onlyOneHost, final boolean errorsAsFailedConnections,
             @Nonnegative final long timeout, @Nonnull final TimeUnit unit
     ) {
@@ -95,11 +92,15 @@ public class RxPostgresClient implements PostgresClient {
                 final AtomicReference<Throwable> error = new AtomicReference<Throwable>(null);
                 final Collection<PostgresConnection> connections = new Vector<PostgresConnection>(nConnections);
 
-                postgresHosts.forEach(new Action1<Map.Entry<InetAddress,Integer>>() {
+                postgresHosts.forEach(new Action1<PostgresConnection.Configuration>() {
                     @Override
-                    public void call(final Map.Entry<InetAddress,Integer> host) {
+                    public void call(final PostgresConnection.Configuration hostConfiguration) {
                         if(subs.isUnsubscribed() || null != error.get())
                             return;
+
+                        final PostgresConnectionsProvider connectionsProvider = new PostgresConnectionsProvider(
+                                eventLoopGroup, timeout, unit
+                        );
 
                         Schedulers
                                 .newThread()
@@ -109,8 +110,8 @@ public class RxPostgresClient implements PostgresClient {
                                     public void call() {
                                         if (! onlyOneHost || ! someConnected.get()) {
                                             try {
-                                                TcpIpPostgresConnection c = new TcpIpPostgresConnection(
-                                                        eventLoopGroup, host.getKey(), host.getValue(), timeout, unit
+                                                PostgresConnection c = hostConfiguration.connectionFromProvider(
+                                                        connectionsProvider
                                                 );
                                                 if(onlyOneHost) {
                                                     if(someConnected.compareAndSet(false, true))
@@ -124,6 +125,7 @@ public class RxPostgresClient implements PostgresClient {
                                                         Try.<PostgresConnection,FailedConnectionException>success(c)
                                                 );
                                                 connections.add(c);
+
                                             } catch (FailedConnectionException e) {
                                                 if(errorsAsFailedConnections) {
                                                     subs.onNext(
@@ -262,11 +264,11 @@ public class RxPostgresClient implements PostgresClient {
         eventLoopGroup.shutdownGracefully();
     }
 
-    public static Builder newClient() {
-        return new Builder();
+    public static Configuration newConfiguration() {
+        return new Configuration();
     }
 
-    public static class Builder {
+    public static class Configuration {
         private static class HostPort {
             private static final String LOCALHOST = "localhost";
 
@@ -295,23 +297,31 @@ public class RxPostgresClient implements PostgresClient {
         }
 
         private final ArrayList<HostPort> hostPorts = new ArrayList<HostPort>();
+        private final ArrayList<PostgresConnection.Configuration> configurations =
+                new ArrayList<PostgresConnection.Configuration>();
         private boolean onlyOneHost = true;
         private boolean abortOnError = true;
 
-        public Builder tcpIp(@Nonnull String host, @Nonnegative int port) {
+        public Configuration tcpIp(@Nonnull String host, @Nonnegative int port) {
             checkTextNotNullNotEmpty(host, "host");
             hostPorts.add(new HostPort(host, port));
             return this;
         }
 
-        public Builder tcpIp(@Nonnull String host) {
+        public Configuration tcpIp(@Nonnull String host) {
             checkTextNotNullNotEmpty(host, "host");
             hostPorts.add(new HostPort(host));
             return this;
         }
 
-        public Builder tcpIp() {
+        public Configuration tcpIp() {
             hostPorts.add(new HostPort());
+            return this;
+        }
+
+        public Configuration configuration(@Nonnull PostgresConnection.Configuration configuration) {
+            checkNotNull(configuration, "configuration");
+            configurations.add(configuration);
             return this;
         }
 
@@ -323,7 +333,7 @@ public class RxPostgresClient implements PostgresClient {
          * @param connectionsSelector The selector to use to select which connections to return
          * @return The Builder, to allow keep chaining calls
          */
-        public Builder selectConnections(@Nonnull ConnectionsSelector connectionsSelector) {
+        public Configuration selectConnections(@Nonnull ConnectionsSelector connectionsSelector) {
             checkNotNull(connectionsSelector, "connectionsSelector");
 
             switch (connectionsSelector) {
@@ -353,7 +363,7 @@ public class RxPostgresClient implements PostgresClient {
          *
          * @return
          */
-        public Builder abortOnError() {
+        public Configuration abortOnError() {
             abortOnError = false;
             return this;
         }
@@ -366,31 +376,14 @@ public class RxPostgresClient implements PostgresClient {
                 tcpIp();
 
             // Resolve hosts into IP address(es)
-            Observable<Map.Entry<InetAddress,Integer>> hosts = Observable.from(hostPorts)
-                    .flatMap(new Func1<HostPort, Observable<Map.Entry<InetAddress,Integer>>>() {
+            Observable<PostgresConnection.Configuration> hosts = Observable.from(hostPorts)
+                    .map(new Func1<HostPort, PostgresConnection.Configuration>() {
                         @Override
-                        public Observable<Map.Entry<InetAddress,Integer>> call(final HostPort hostPort) {
-                            InetAddress[] addresses;
-                            try {
-                                addresses = InetAddress.getAllByName(hostPort.host);
-                            } catch (UnknownHostException e) {
-                                return abortOnError ?
-                                        Observable.<Map.Entry<InetAddress,Integer>>empty()
-                                        : Observable.<Map.Entry<InetAddress,Integer>>error(e);
-                            }
-
-                            return Observable.from(addresses)
-                                    .map(new Func1<InetAddress, Map.Entry<InetAddress,Integer>>() {
-                                        @Override
-                                        public Map.Entry<InetAddress,Integer> call(InetAddress inetAddress) {
-                                            return new AbstractMap.SimpleImmutableEntry<InetAddress,Integer>(
-                                                    inetAddress, hostPort.port
-                                            );
-                                        }
-                                    });
+                        public PostgresConnection.Configuration call(final HostPort hostPort) {
+                            return new TcpIpPostgresConnectionConfiguration(hostPort.host, hostPort.port);
                         }
                     })
-            ;
+                    .mergeWith(Observable.from(configurations));
 
             return new RxPostgresClient(hosts, onlyOneHost, abortOnError, timeout, unit);
         }

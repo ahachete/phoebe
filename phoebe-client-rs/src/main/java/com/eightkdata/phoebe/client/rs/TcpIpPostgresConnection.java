@@ -30,15 +30,17 @@ import io.netty.buffer.PooledByteBufAllocator;
 import io.netty.channel.*;
 import io.netty.channel.socket.nio.NioSocketChannel;
 
-import javax.annotation.Nonnegative;
 import javax.annotation.Nonnull;
+import javax.annotation.Nullable;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.Charset;
 import java.util.Deque;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.TimeUnit;
 
+import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
 
 /**
@@ -46,19 +48,34 @@ import static com.google.common.base.Preconditions.checkState;
  */
 public class TcpIpPostgresConnection implements PostgresConnection {
 
-    private final Channel channel;
+    private final @Nullable Channel channel;
+    private final @Nonnull TcpIpPostgresConnectionConfiguration configuration;
 
     public TcpIpPostgresConnection(
-            @Nonnull EventLoopGroup eventLoopGroup, @Nonnull InetAddress host, @Nonnegative int port,
-            long timeout, final TimeUnit unit
+            @Nonnull EventLoopGroup eventLoopGroup, @Nonnull TcpIpPostgresConnectionConfiguration configuration,
+            long timeout, @Nonnull final TimeUnit unit
     ) throws FailedConnectionException {
+        checkNotNull(eventLoopGroup, "eventLoopGroup");
+        checkNotNull(configuration, "configuration");
+        checkNotNull(unit, "unit");
+
+        InetAddress remoteAddress;
+        try {
+            // TODO: would it be interesting to iterate with getAllByName if the first connection(s) fail at connect() ?
+            remoteAddress = InetAddress.getByName(configuration.host());
+        } catch (UnknownHostException e) {
+            throw new FailedConnectionException("Cannot resolve host", e);
+        }
+
+        this.configuration = configuration;
 
         ChannelFuture channelFuture = new Bootstrap()
                 .group(eventLoopGroup)
                 .channel(NioSocketChannel.class)
                 .option(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT)
                 .handler(new ChannelHandlerInitializer())
-                .connect(host, port)
+                .remoteAddress(remoteAddress, configuration.port())
+                .connect()
         ;
 
         try {
@@ -70,7 +87,9 @@ public class TcpIpPostgresConnection implements PostgresConnection {
         }
 
         if(! channelFuture.isSuccess()) {
-            throw new FailedConnectionException("Could not connect to " + host, channelFuture.cause());
+            throw new FailedConnectionException(
+                    "Could not configureBootstrap to " + configuration.host(), channelFuture.cause()
+            );
         }
 
         channel = channelFuture.channel();
@@ -101,20 +120,15 @@ public class TcpIpPostgresConnection implements PostgresConnection {
         }
     }
 
+
     public InetSocketAddress remoteAddress() {
         checkState(null != channel, "Connection was not successful!");
         return (InetSocketAddress) channel.remoteAddress();
     }
 
     @Override
-    public String host() {
-        return remoteAddress().getHostName();
-    }
-
-    @Nonnull @Nonnegative
-    @Override
-    public int port() {
-        return remoteAddress().getPort();
+    public @Nonnull PostgresConnection.Configuration configuration() {
+        return configuration;
     }
 
     public int localPort() {
@@ -123,7 +137,7 @@ public class TcpIpPostgresConnection implements PostgresConnection {
 
     @Override
     public String toString() {
-        return getClass().getSimpleName() + "{ :" + localPort() + " -> " + host() + ":" + port() + " }";
+        return getClass().getSimpleName() + "{ :" + localPort() + " -> " + remoteAddress() + " }";
     }
 
 }

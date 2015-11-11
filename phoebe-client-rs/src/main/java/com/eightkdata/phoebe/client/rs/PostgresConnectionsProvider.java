@@ -18,27 +18,38 @@
 
 package com.eightkdata.phoebe.client.rs;
 
+import io.netty.channel.EventLoopGroup;
+
 import javax.annotation.Nonnegative;
 import javax.annotation.Nonnull;
+import java.util.concurrent.TimeUnit;
+
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 
 /**
  *
  */
-public interface PostgresConnection {
+public class PostgresConnectionsProvider {
 
-    void close();
+    private final @Nonnull EventLoopGroup eventLoopGroup;
+    private final @Nonnegative long timeout;
+    private final @Nonnull TimeUnit timeUnit;
 
-    @Nonnull Configuration configuration();
-
-    interface Configuration {
-
-        @Nonnull String host();
-
-        @Nonnull @Nonnegative int port();
-
-        @Nonnull PostgresConnection connectionFromProvider(@Nonnull PostgresConnectionsProvider postgresConnections)
-        throws FailedConnectionException;
-
+    public PostgresConnectionsProvider(
+            @Nonnull EventLoopGroup eventLoopGroup, long timeout, @Nonnull TimeUnit timeUnit
+    ) {
+        this.eventLoopGroup = checkNotNull(eventLoopGroup, "eventLoopGroup");
+        checkState(timeout > 0, "timeout");
+        this.timeout = timeout;
+        this.timeUnit = checkNotNull(timeUnit, "timeunit");
     }
+
+    public TcpIpPostgresConnection tcpIpPostgresConnection(TcpIpPostgresConnectionConfiguration configuration)
+    throws FailedConnectionException {
+        return new TcpIpPostgresConnection(eventLoopGroup, configuration, timeout, timeUnit);
+    }
+
+    // TODO: add more methods here to support other connection methods
 
 }
